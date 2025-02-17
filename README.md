@@ -25,7 +25,7 @@ network that takes as input the latent space and outputs the reconstructed time 
 
 The model is trained using the ELBO loss function, which is the sum of the reconstruction loss and the KL divergence loss.
 
-# Purpose
+## Purpose
 
 The purpose of this model is to obtain the likelihood of a given time series data, in such a way that we can detect anomalies
 in the occupancy of the parking lots.
