@@ -5,6 +5,7 @@ import torch.nn as nn
 import matplotlib
 import matplotlib.pyplot as plt
 import torch.optim
+from sympy import exp
 from torch.utils.data import DataLoader
 import pandas as pd
 import torch.multiprocessing as mp
@@ -19,7 +20,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class VAE(nn.Module):
 
-    '''
+    """
     Variational Autoencoder
 
     Args:
@@ -36,11 +37,12 @@ class VAE(nn.Module):
 
     Methods:
     - encode: encode input data
-    '''
+    """
     def __init__(self, input_dim=144, hidden_dim=120, latent_dim=80, device=device):
         super(VAE, self).__init__()
 
         # encoder
+        self.device = device
         self.encoder = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.LeakyReLU(0.2),
@@ -97,6 +99,17 @@ def loss_function(x, x_hat, mean, log_var):
     return reproduction_loss + KLD
 
 
+def likelihood_function(model : VAE, example):
+    mean, logvar = model.encode(example)
+    z = model.reparameterization(mean, logvar)
+    x_hat = model.decode(z)
+    rec_loss = nn.functional.binary_cross_entropy(example, x_hat, reduction='sum')
+    kl_loss = -0.5 * torch.sum(1 + logvar - mean.pow(2) - logvar.exp())
+    log_likelihood = -((rec_loss + kl_loss) / example.shape[1])
+    likelihood = torch.exp(log_likelihood)
+    return likelihood.item(), x_hat
+
+
 def train(model, optimizer, device, train_loader, val_loader, epochs=50, x_dim=144, batch_size=32, patience=8):
     lowest_loss = np.inf
     pat = 0
@@ -137,6 +150,7 @@ def train(model, optimizer, device, train_loader, val_loader, epochs=50, x_dim=1
             break
 
     return overall_loss
+
 
 
 data_path = 'data/time_series.csv'
@@ -201,12 +215,11 @@ if __name__ == '__main__':
         torch.save(model.state_dict(), path)
 
 
-    for i in range(10):
+    for i in range(20):
         example = te[i].view(1, 144).to(device)
-        x_hat, mean, logvar = model(example)
-        loss = loss_function(example, x_hat, mean, logvar)
-        print("Loss: ", loss.item())
+        likelihood, x_hat = likelihood_function(model, example)
+        print("Likelihood: ", likelihood)
         plt.plot(x_hat.detach().cpu().reshape(144, -1))
         plt.plot(example.detach().cpu().reshape(144, -1))
         plt.show()
-    generate_series([0, 0], [1, 1])
+    #generate_series([0, 0], [1, 1])
