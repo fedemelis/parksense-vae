@@ -9,15 +9,34 @@ from torch.utils.data import DataLoader
 import pandas as pd
 import torch.multiprocessing as mp
 import os
+from torchviz import make_dot
+import datetime
 
 mp.set_start_method('spawn', force=True)
 matplotlib.use('TkAgg')
-import datetime
-
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class VAE(nn.Module):
+
+    '''
+    Variational Autoencoder
+
+    Args:
+    - input_dim: int, input dimension
+    - hidden_dim: int, hidden dimension
+    - latent_dim: int, latent dimension
+    - device: torch.device, device to run the model
+
+    Attributes:
+    - encoder: nn.Sequential, encoder network
+    - decoder: nn.Sequential, decoder network
+    - mean_layer: nn.Linear, mean layer
+    - logvar_layer: nn.Linear, logvar layer
+
+    Methods:
+    - encode: encode input data
+    '''
     def __init__(self, input_dim=144, hidden_dim=120, latent_dim=80, device=device):
         super(VAE, self).__init__()
 
@@ -36,12 +55,12 @@ class VAE(nn.Module):
         )
 
         # latent mean and variance
-        self.mean_layer = nn.Linear(latent_dim, 2)
-        self.logvar_layer = nn.Linear(latent_dim, 2)
+        self.mean_layer = nn.Linear(latent_dim, hidden_dim)
+        self.logvar_layer = nn.Linear(latent_dim, hidden_dim)
 
         # decoder
         self.decoder = nn.Sequential(
-            nn.Linear(2, latent_dim),
+            nn.Linear(hidden_dim, latent_dim),
             nn.LeakyReLU(0.2),
             nn.Linear(latent_dim, hidden_dim),
             nn.LeakyReLU(0.2),
@@ -78,7 +97,9 @@ def loss_function(x, x_hat, mean, log_var):
     return reproduction_loss + KLD
 
 
-def train(model, optimizer, device, train_loader, epochs=50, x_dim=144, batch_size=32):
+def train(model, optimizer, device, train_loader, val_loader, epochs=50, x_dim=144, batch_size=32, patience=8):
+    lowest_loss = np.inf
+    pat = 0
     model.train()
     for epoch in range(epochs):
         overall_loss = 0
@@ -96,7 +117,25 @@ def train(model, optimizer, device, train_loader, epochs=50, x_dim=144, batch_si
                 loss.backward()
                 optimizer.step()
 
+
         print("\tEpoch", epoch + 1, "\tAverage Loss: ", overall_loss / (batch_idx * batch_size))
+        for b_id, x in enumerate(val_loader):
+            if x.shape[0] != batch_size:
+                continue
+            x = x.view(batch_size, x_dim).to(device)
+            x_hat, mean, log_var = model(x)
+            loss = loss_function(x, x_hat, mean, log_var)
+            overall_loss += loss.item()
+        print("\tEpoch", epoch + 1, "\tValidation Loss: ", overall_loss / (b_id * batch_size))
+        if (overall_loss / (b_id * batch_size)) < lowest_loss:
+            lowest_loss = overall_loss / (b_id * batch_size)
+            pat = 0
+        else:
+            pat += 1
+        if pat >= patience:
+            print("Early stopping")
+            break
+
     return overall_loss
 
 
@@ -147,25 +186,27 @@ if __name__ == '__main__':
     new_data.to_csv('data/y_sequences.csv', index=False, header=False)
 
     dataset = torch.tensor(new_data.values, dtype=torch.float32, device=device)
-    dataloader = DataLoader(dataset, batch_size=128, shuffle=True, num_workers=0)
+    tr, te = torch.utils.data.random_split(dataset, [int(len(dataset) * 0.8), len(dataset) - int(len(dataset) * 0.8)])
+    dataloader = DataLoader(tr, batch_size=128, shuffle=True)
+    dataloader_test = DataLoader(te, batch_size=128, shuffle=True)
 
     model = VAE().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.9e-3)
     # optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
-
-    if os.path.exists('models/vae.pth'):
-        model.load_state_dict(torch.load('models/vae.pth', weights_only=True))
+    path = f'models/vae-{device}.pth'
+    if os.path.exists(path):
+        model.load_state_dict(torch.load(path, weights_only=True))
     else:
-        train(model, optimizer, device, dataloader, epochs=100, x_dim=144, batch_size=128)
-        torch.save(model.state_dict(), 'models/vae.pth')
+        train(model, optimizer, device, dataloader, dataloader_test, epochs=10000, x_dim=144, batch_size=128, patience=8)
+        torch.save(model.state_dict(), path)
 
-    for i in range(110, 150):
-        example = dataset[i].view(1, 144)
+
+    for i in range(10):
+        example = te[i].view(1, 144).to(device)
         x_hat, mean, logvar = model(example)
         loss = loss_function(example, x_hat, mean, logvar)
         print("Loss: ", loss.item())
         plt.plot(x_hat.detach().cpu().reshape(144, -1))
         plt.plot(example.detach().cpu().reshape(144, -1))
         plt.show()
-
     generate_series([0, 0], [1, 1])
